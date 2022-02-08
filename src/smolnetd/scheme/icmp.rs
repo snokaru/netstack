@@ -1,17 +1,20 @@
-use smoltcp::socket::{IcmpEndpoint, IcmpPacketMetadata, IcmpSocket, IcmpSocketBuffer, SocketHandle};
+use byteorder::{ByteOrder, NetworkEndian};
+use smoltcp::socket::{
+    IcmpEndpoint, IcmpPacketMetadata, IcmpSocket, IcmpSocketBuffer,
+};
 use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr, IpAddress, IpEndpoint};
+use smoltcp::iface::{SocketHandle};
 use std::mem;
 use std::str;
-use syscall::{Error as SyscallError, Result as SyscallResult};
 use syscall;
-use byteorder::{ByteOrder, NetworkEndian};
+use syscall::{Error as SyscallError, Result as SyscallResult};
 
+use super::socket::{DupResult, SchemeFile, SchemeSocket, SocketFile, SocketScheme};
+use super::{Smolnetd, SmolnetInterface};
 use device::NetworkDevice;
 use port_set::PortSet;
-use super::socket::{DupResult, SchemeFile, SchemeSocket, SocketFile, SocketScheme};
-use super::{Smolnetd, SocketSet};
 
-pub type IcmpScheme = SocketScheme<IcmpSocket<'static, 'static>>;
+pub type IcmpScheme = SocketScheme<IcmpSocket<'static>>;
 
 enum IcmpSocketType {
     Echo,
@@ -24,7 +27,7 @@ pub struct IcmpData {
     ident: u16,
 }
 
-impl<'a, 'b> SchemeSocket for IcmpSocket<'a, 'b> {
+impl<'a> SchemeSocket for IcmpSocket<'a> {
     type SchemeDataT = PortSet;
     type DataT = IcmpData;
     type SettingT = ();
@@ -70,7 +73,7 @@ impl<'a, 'b> SchemeSocket for IcmpSocket<'a, 'b> {
     }
 
     fn new_socket(
-        socket_set: &mut SocketSet,
+        iface: &mut SmolnetInterface,
         path: &str,
         _uid: u32,
         ident_set: &mut Self::SchemeDataT,
@@ -93,15 +96,15 @@ impl<'a, 'b> SchemeSocket for IcmpSocket<'a, 'b> {
                 let socket = IcmpSocket::new(
                     IcmpSocketBuffer::new(
                         vec![IcmpPacketMetadata::EMPTY; Smolnetd::SOCKET_BUFFER_SIZE],
-                        vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
+                        vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE],
                     ),
                     IcmpSocketBuffer::new(
                         vec![IcmpPacketMetadata::EMPTY; Smolnetd::SOCKET_BUFFER_SIZE],
-                        vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
-                    )
+                        vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE],
+                    ),
                 );
-                let handle = socket_set.add(socket);
-                let mut icmp_socket = socket_set.get::<IcmpSocket>(handle);
+                let handle = iface.add_socket(socket);
+                let mut icmp_socket = iface.get_socket::<IcmpSocket>(handle);
                 let ident = ident_set
                     .get_port()
                     .ok_or_else(|| SyscallError::new(syscall::EINVAL))?;
@@ -125,15 +128,15 @@ impl<'a, 'b> SchemeSocket for IcmpSocket<'a, 'b> {
                 let socket = IcmpSocket::new(
                     IcmpSocketBuffer::new(
                         vec![IcmpPacketMetadata::EMPTY; Smolnetd::SOCKET_BUFFER_SIZE],
-                        vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
+                        vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE],
                     ),
                     IcmpSocketBuffer::new(
                         vec![IcmpPacketMetadata::EMPTY; Smolnetd::SOCKET_BUFFER_SIZE],
-                        vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
-                    )
+                        vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE],
+                    ),
                 );
-                let handle = socket_set.add(socket);
-                let mut icmp_socket = socket_set.get::<IcmpSocket>(handle);
+                let handle = iface.add_socket(socket);
+                let mut icmp_socket = iface.get_socket::<IcmpSocket>(handle);
                 let ident = ident_set
                     .get_port()
                     .ok_or_else(|| SyscallError::new(syscall::EINVAL))?;
@@ -181,16 +184,15 @@ impl<'a, 'b> SchemeSocket for IcmpSocket<'a, 'b> {
                         data: payload,
                     };
 
-                    let icmp_payload = self.send(icmp_repr.buffer_len(), file.data.ip)
+                    let icmp_payload = self
+                        .send(icmp_repr.buffer_len(), file.data.ip)
                         .map_err(|_| syscall::Error::new(syscall::EINVAL))?;
                     let mut icmp_packet = Icmpv4Packet::new_unchecked(icmp_payload);
                     //TODO: replace Default with actual caps
                     icmp_repr.emit(&mut icmp_packet, &Default::default());
                     Ok(Some(buf.len()))
                 }
-                IcmpSocketType::Udp => {
-                    Err(SyscallError::new(syscall::EINVAL))
-                }
+                IcmpSocketType::Udp => Err(SyscallError::new(syscall::EINVAL)),
             }
         } else if file.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
             Err(SyscallError::new(syscall::EAGAIN))
@@ -232,7 +234,7 @@ impl<'a, 'b> SchemeSocket for IcmpSocket<'a, 'b> {
     }
 
     fn dup(
-        _socket_set: &mut SocketSet,
+        _iface: &mut SmolnetInterface,
         _file: &mut SchemeFile<Self>,
         _path: &str,
         _: &mut Self::SchemeDataT,

@@ -2,7 +2,7 @@
 mod nodes;
 mod notifier;
 
-use smoltcp::wire::{IpAddress, EthernetAddress, IpCidr, Ipv4Address};
+use smoltcp::wire::{IpAddress, EthernetAddress, IpCidr, Ipv4Address, HardwareAddress};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -19,7 +19,7 @@ use syscall;
 use self::nodes::*;
 use self::notifier::*;
 use redox_netstack::error::{Error, Result};
-use super::{post_fevent, Interface};
+use super::{post_fevent, Iface};
 
 const WRITE_BUFFER_MAX_SIZE: usize = 0xffff;
 
@@ -47,7 +47,7 @@ fn parse_default_gw(value: &str) -> SyscallResult<Ipv4Address> {
     Err(SyscallError::new(syscall::EINVAL))
 }
 
-fn mk_root_node(iface: Interface, notifier: NotifierRef, dns_config: DNSConfigRef) -> CfgNodeRef {
+fn mk_root_node(iface: Iface, notifier: NotifierRef, dns_config: DNSConfigRef) -> CfgNodeRef {
     cfg_node!{
         "resolv" => {
             "nameserver" => {
@@ -157,7 +157,7 @@ fn mk_root_node(iface: Interface, notifier: NotifierRef, dns_config: DNSConfigRe
                 "mac" => {
                     rw [iface, notifier] (Option<EthernetAddress>, None)
                     || {
-                        format!("{}\n", iface.borrow().ethernet_addr())
+                        format!("{}\n", iface.borrow().hardware_addr())
                     }
                     |cur_value, line| {
                         if cur_value.is_none() {
@@ -174,7 +174,7 @@ fn mk_root_node(iface: Interface, notifier: NotifierRef, dns_config: DNSConfigRe
                     }
                     |cur_value| {
                         if let Some(mac) = *cur_value {
-                            iface.borrow_mut().set_ethernet_addr(mac);
+                            iface.borrow_mut().set_hardware_addr(HardwareAddress::Ethernet(mac));
                             notifier.borrow_mut().schedule_notify("ifaces/eth0/mac");
                         }
                         Ok(())
@@ -345,7 +345,7 @@ pub struct NetCfgScheme {
 }
 
 impl NetCfgScheme {
-    pub fn new(iface: Interface, scheme_file: File) -> NetCfgScheme {
+    pub fn new(iface: Iface, scheme_file: File) -> NetCfgScheme {
         let notifier = Notifier::new_ref();
         let dns_config = Rc::new(RefCell::new(DNSConfig {
             name_server: Ipv4Address::new(8, 8, 8, 8),

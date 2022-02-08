@@ -1,10 +1,9 @@
 use netutils::getcfg;
 use smoltcp;
-use smoltcp::iface::{EthernetInterface, EthernetInterfaceBuilder, NeighborCache, Routes};
-use smoltcp::phy::EthernetTracer;
-use smoltcp::socket::SocketSet as SmoltcpSocketSet;
+use smoltcp::iface::{Interface, InterfaceBuilder, NeighborCache, Routes};
+use smoltcp::phy::Tracer;
 use smoltcp::time::{Duration, Instant};
-use smoltcp::wire::{EthernetAddress, IpAddress, IpCidr, IpEndpoint, Ipv4Address};
+use smoltcp::wire::{EthernetAddress, IpAddress, IpCidr, IpEndpoint, Ipv4Address, HardwareAddress};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
 use std::fs::File;
@@ -12,37 +11,36 @@ use std::io::{self, Read, Write};
 use std::mem::size_of;
 use std::rc::Rc;
 use std::str::FromStr;
-use syscall::data::TimeSpec;
 use syscall;
+use syscall::data::TimeSpec;
 
+use self::icmp::IcmpScheme;
+use self::ip::IpScheme;
+use self::netcfg::NetCfgScheme;
+use self::tcp::TcpScheme;
+use self::udp::UdpScheme;
 use buffer_pool::{Buffer, BufferPool};
 use device::NetworkDevice;
 use redox_netstack::error::{Error, Result};
-use self::ip::IpScheme;
-use self::tcp::TcpScheme;
-use self::udp::UdpScheme;
-use self::icmp::IcmpScheme;
-use self::netcfg::NetCfgScheme;
 
+mod icmp;
 mod ip;
+mod netcfg;
 mod socket;
 mod tcp;
 mod udp;
-mod icmp;
-mod netcfg;
 
-type SocketSet = SmoltcpSocketSet<'static, 'static, 'static>;
-type Interface = Rc<RefCell<EthernetInterface<'static, 'static, 'static, EthernetTracer<NetworkDevice>>>>;
+type SmolnetInterface = Interface<'static, Tracer<NetworkDevice>>;
+type Iface = Rc<RefCell<SmolnetInterface>>;
 
-const MAX_DURATION: Duration = Duration { millis: ::std::u64::MAX };
-const MIN_DURATION: Duration = Duration { millis: 0 };
+const MAX_DURATION: Duration = Duration::from_micros(::std::u64::MAX);
+const MIN_DURATION: Duration = Duration::from_micros(0);
 
 pub struct Smolnetd {
     network_file: Rc<RefCell<File>>,
     time_file: File,
 
-    iface: Interface,
-    socket_set: Rc<RefCell<SocketSet>>,
+    iface: Iface,
     timer: ::std::time::Instant,
 
     ip_scheme: IpScheme,
@@ -58,8 +56,10 @@ pub struct Smolnetd {
 impl Smolnetd {
     const MAX_PACKET_SIZE: usize = 2048;
     const SOCKET_BUFFER_SIZE: usize = 128; //packets
-    const MIN_CHECK_TIMEOUT: Duration = Duration { millis: 10 };
-    const MAX_CHECK_TIMEOUT: Duration = Duration { millis: 500 };
+
+    // multiplied by 1000 due to previously being in milliseconds (millis)
+    const MIN_CHECK_TIMEOUT: Duration = Duration::from_millis(10); 
+    const MAX_CHECK_TIMEOUT: Duration = Duration::from_millis(500);
 
     pub fn new(
         network_file: File,
@@ -84,33 +84,34 @@ impl Smolnetd {
         let buffer_pool = Rc::new(RefCell::new(BufferPool::new(Self::MAX_PACKET_SIZE)));
         let input_queue = Rc::new(RefCell::new(VecDeque::new()));
         let network_file = Rc::new(RefCell::new(network_file));
-        let network_device = EthernetTracer::new(NetworkDevice::new(
-            Rc::clone(&network_file),
-            Rc::clone(&input_queue),
-            hardware_addr,
-            Rc::clone(&buffer_pool),
-        ), |_timestamp, printer| {
-            trace!("{}", printer)
-        });
+        let network_device = Tracer::new(
+            NetworkDevice::new(
+                Rc::clone(&network_file),
+                Rc::clone(&input_queue),
+                hardware_addr,
+                Rc::clone(&buffer_pool),
+            ),
+            |_timestamp, printer| trace!("{}", printer),
+        );
         let mut routes = Routes::new(BTreeMap::new());
-        routes.add_default_ipv4_route(default_gw).expect("Failed to add default gateway");
-        let iface = EthernetInterfaceBuilder::new(network_device)
+        routes
+            .add_default_ipv4_route(default_gw)
+            .expect("Failed to add default gateway");
+        let iface = InterfaceBuilder::new(network_device, vec![])
             .neighbor_cache(NeighborCache::new(BTreeMap::new()))
-            .ethernet_addr(hardware_addr)
+            .hardware_addr(HardwareAddress::Ethernet(hardware_addr))
             .ip_addrs(protocol_addrs)
             .routes(routes)
             .finalize();
         let iface = Rc::new(RefCell::new(iface));
-        let socket_set = Rc::new(RefCell::new(SocketSet::new(vec![])));
         Smolnetd {
             iface: Rc::clone(&iface),
-            socket_set: Rc::clone(&socket_set),
             timer: ::std::time::Instant::now(),
             time_file,
-            ip_scheme: IpScheme::new(Rc::clone(&socket_set), ip_file),
-            udp_scheme: UdpScheme::new(Rc::clone(&socket_set), udp_file),
-            tcp_scheme: TcpScheme::new(Rc::clone(&socket_set), tcp_file),
-            icmp_scheme: IcmpScheme::new(Rc::clone(&socket_set), icmp_file),
+            ip_scheme: IpScheme::new(Rc::clone(&iface), ip_file),
+            udp_scheme: UdpScheme::new(Rc::clone(&iface), udp_file),
+            tcp_scheme: TcpScheme::new(Rc::clone(&iface), tcp_file),
+            icmp_scheme: IcmpScheme::new(Rc::clone(&iface), icmp_file),
             netcfg_scheme: NetCfgScheme::new(Rc::clone(&iface), netcfg_file),
             input_queue,
             network_file,
@@ -183,26 +184,27 @@ impl Smolnetd {
         let timeout = {
             let mut iter_limit = 10usize;
             let mut iface = self.iface.borrow_mut();
-            let mut socket_set = self.socket_set.borrow_mut();
             let timestamp = Instant::from(self.timer);
             loop {
                 if iter_limit == 0 {
                     break MIN_DURATION;
                 }
                 iter_limit -= 1;
-                match iface.poll(&mut socket_set, timestamp) {
+                match iface.poll(timestamp) {
                     Ok(_) | Err(smoltcp::Error::Unrecognized) => (),
                     Err(e) => {
                         error!("poll error: {}", e);
                         break MIN_DURATION;
                     }
                 }
-                match iface.poll_delay(&socket_set, timestamp) {
-                    Some(Duration { millis: 0 }) => { }
+                match iface.poll_delay(timestamp) {
                     Some(delay) => {
-                        break ::std::cmp::min(MAX_DURATION, delay)
-                    }
-                    None => break MAX_DURATION
+                        match delay.millis() {
+                            0 => {},
+                            _ => break ::std::cmp::min(MAX_DURATION, delay),
+                        }
+                    },
+                    None => break MAX_DURATION,
                 }
             }
         };
@@ -221,10 +223,13 @@ impl Smolnetd {
                 Ok(count) => count,
                 Err(err) => match err.kind() {
                     io::ErrorKind::WouldBlock => break,
-                    _ => return Err(
-                        Error::from_io_error(err, "Failed to read from network file")
-                    )
-                }
+                    _ => {
+                        return Err(Error::from_io_error(
+                            err,
+                            "Failed to read from network file",
+                        ))
+                    }
+                },
             };
             buffer.resize(count);
             self.input_queue.borrow_mut().push_back(buffer);

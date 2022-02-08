@@ -1,11 +1,12 @@
-use smoltcp::socket::{SocketHandle, TcpSocket, TcpSocketBuffer};
+use smoltcp::socket::{TcpSocket, TcpSocketBuffer};
+use smoltcp::iface::{SocketHandle};
 use std::str;
 use syscall::{Error as SyscallError, Result as SyscallResult};
 use syscall;
 
 use port_set::PortSet;
 use super::socket::{DupResult, SchemeFile, SchemeSocket, SocketFile, SocketScheme};
-use super::{parse_endpoint, SocketSet};
+use super::{parse_endpoint, SmolnetInterface};
 
 pub type TcpScheme = SocketScheme<TcpSocket<'static>>;
 
@@ -55,7 +56,7 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
     }
 
     fn new_socket(
-        socket_set: &mut SocketSet,
+        iface: &mut SmolnetInterface,
         path: &str,
         uid: u32,
         port_set: &mut Self::SchemeDataT,
@@ -83,14 +84,14 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
             return Err(SyscallError::new(syscall::EADDRINUSE));
         }
 
-        let socket_handle = socket_set.add(socket);
+        let socket_handle = iface.add_socket(socket);
 
-        let mut tcp_socket = socket_set.get::<TcpSocket>(socket_handle);
+        let (tcp_socket, cx) = iface.get_socket_and_context::<TcpSocket>(socket_handle);
 
         if remote_endpoint.is_specified() {
             trace!("Connecting tcp {} {}", local_endpoint, remote_endpoint);
             tcp_socket
-                .connect(remote_endpoint, local_endpoint)
+                .connect(cx, remote_endpoint, local_endpoint)
                 .expect("Can't connect tcp socket ");
         } else {
             trace!("Listening tcp {}", local_endpoint);
@@ -150,7 +151,7 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
     }
 
     fn dup(
-        socket_set: &mut SocketSet,
+        iface: &mut SmolnetInterface,
         file: &mut SchemeFile<Self>,
         path: &str,
         port_set: &mut Self::SchemeDataT,
@@ -158,7 +159,7 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
         let socket_handle = file.socket_handle();
 
         let (is_active, local_endpoint) = {
-            let socket = socket_set.get::<TcpSocket>(socket_handle);
+            let socket = iface.get_socket::<TcpSocket>(socket_handle);
             (socket.is_active(), socket.local_endpoint())
         };
 
@@ -179,9 +180,9 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
                 let rx_buffer = TcpSocketBuffer::new(rx_packets);
                 let tx_buffer = TcpSocketBuffer::new(tx_packets);
                 let socket = TcpSocket::new(rx_buffer, tx_buffer);
-                let new_socket_handle = socket_set.add(socket);
+                let new_socket_handle = iface.add_socket(socket);
                 {
-                    let mut tcp_socket = socket_set.get::<TcpSocket>(new_socket_handle);
+                    let tcp_socket = iface.get_socket::<TcpSocket>(new_socket_handle);
                     tcp_socket
                         .listen(local_endpoint)
                         .expect("Can't listen on local endpoint");

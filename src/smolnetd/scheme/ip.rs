@@ -1,16 +1,17 @@
-use smoltcp::socket::{RawPacketMetadata, RawSocket, RawSocketBuffer, SocketHandle};
+use smoltcp::socket::{RawPacketMetadata, RawSocket, RawSocketBuffer};
 use smoltcp::wire::{IpProtocol, IpVersion};
+use smoltcp::iface::{SocketHandle};
 use std::str;
-use syscall::{Error as SyscallError, Result as SyscallResult};
 use syscall;
+use syscall::{Error as SyscallError, Result as SyscallResult};
 
-use device::NetworkDevice;
-use super::{Smolnetd, SocketSet};
 use super::socket::{DupResult, SchemeFile, SchemeSocket, SocketFile, SocketScheme};
+use super::{Smolnetd, SmolnetInterface};
+use device::NetworkDevice;
 
-pub type IpScheme = SocketScheme<RawSocket<'static, 'static>>;
+pub type IpScheme = SocketScheme<RawSocket<'static>>;
 
-impl<'a, 'b> SchemeSocket for RawSocket<'a, 'b> {
+impl<'a> SchemeSocket for RawSocket<'a> {
     type SchemeDataT = ();
     type DataT = ();
     type SettingT = ();
@@ -54,7 +55,7 @@ impl<'a, 'b> SchemeSocket for RawSocket<'a, 'b> {
     fn set_hop_limit(&mut self, _hop_limit: u8) {}
 
     fn new_socket(
-        socket_set: &mut SocketSet,
+        iface: &mut SmolnetInterface,
         path: &str,
         uid: u32,
         _: &mut Self::SchemeDataT,
@@ -67,11 +68,11 @@ impl<'a, 'b> SchemeSocket for RawSocket<'a, 'b> {
 
         let rx_buffer = RawSocketBuffer::new(
             vec![RawPacketMetadata::EMPTY; Smolnetd::SOCKET_BUFFER_SIZE],
-            vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
+            vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE],
         );
         let tx_buffer = RawSocketBuffer::new(
             vec![RawPacketMetadata::EMPTY; Smolnetd::SOCKET_BUFFER_SIZE],
-            vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
+            vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE],
         );
         let ip_socket = RawSocket::new(
             IpVersion::Ipv4,
@@ -80,7 +81,7 @@ impl<'a, 'b> SchemeSocket for RawSocket<'a, 'b> {
             tx_buffer,
         );
 
-        let socket_handle = socket_set.add(ip_socket);
+        let socket_handle = iface.add_socket(ip_socket);
         Ok((socket_handle, ()))
     }
 
@@ -119,7 +120,7 @@ impl<'a, 'b> SchemeSocket for RawSocket<'a, 'b> {
     }
 
     fn dup(
-        _socket_set: &mut SocketSet,
+        _iface: &mut SmolnetInterface,
         _file: &mut SchemeFile<Self>,
         _path: &str,
         _: &mut Self::SchemeDataT,

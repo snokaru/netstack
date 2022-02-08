@@ -1,17 +1,18 @@
-use smoltcp::socket::{SocketHandle, UdpPacketMetadata, UdpSocket, UdpSocketBuffer};
+use smoltcp::socket::{UdpPacketMetadata, UdpSocket, UdpSocketBuffer};
+use smoltcp::iface::{SocketHandle};
 use smoltcp::wire::IpEndpoint;
 use std::str;
-use syscall::{Error as SyscallError, Result as SyscallResult};
 use syscall;
+use syscall::{Error as SyscallError, Result as SyscallResult};
 
+use super::socket::{DupResult, SchemeFile, SchemeSocket, SocketFile, SocketScheme};
+use super::{parse_endpoint, Smolnetd, SmolnetInterface};
 use device::NetworkDevice;
 use port_set::PortSet;
-use super::socket::{DupResult, SchemeFile, SchemeSocket, SocketFile, SocketScheme};
-use super::{parse_endpoint, Smolnetd, SocketSet};
 
-pub type UdpScheme = SocketScheme<UdpSocket<'static, 'static>>;
+pub type UdpScheme = SocketScheme<UdpSocket<'static>>;
 
-impl<'a, 'b> SchemeSocket for UdpSocket<'a, 'b> {
+impl<'a> SchemeSocket for UdpSocket<'a> {
     type SchemeDataT = PortSet;
     type DataT = IpEndpoint;
     type SettingT = ();
@@ -57,7 +58,7 @@ impl<'a, 'b> SchemeSocket for UdpSocket<'a, 'b> {
     }
 
     fn new_socket(
-        socket_set: &mut SocketSet,
+        iface: &mut SmolnetInterface,
         path: &str,
         uid: u32,
         port_set: &mut Self::SchemeDataT,
@@ -72,11 +73,11 @@ impl<'a, 'b> SchemeSocket for UdpSocket<'a, 'b> {
 
         let rx_buffer = UdpSocketBuffer::new(
             vec![UdpPacketMetadata::EMPTY; Smolnetd::SOCKET_BUFFER_SIZE],
-            vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
+            vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE],
         );
         let tx_buffer = UdpSocketBuffer::new(
             vec![UdpPacketMetadata::EMPTY; Smolnetd::SOCKET_BUFFER_SIZE],
-            vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
+            vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE],
         );
         let udp_socket = UdpSocket::new(rx_buffer, tx_buffer);
 
@@ -88,9 +89,9 @@ impl<'a, 'b> SchemeSocket for UdpSocket<'a, 'b> {
             return Err(SyscallError::new(syscall::EADDRINUSE));
         }
 
-        let socket_handle = socket_set.add(udp_socket);
+        let socket_handle = iface.add_socket(udp_socket);
 
-        let mut udp_socket = socket_set.get::<UdpSocket>(socket_handle);
+        let mut udp_socket = iface.get_socket::<UdpSocket>(socket_handle);
         udp_socket
             .bind(local_endpoint)
             .expect("Can't bind udp socket to local endpoint");
@@ -143,7 +144,7 @@ impl<'a, 'b> SchemeSocket for UdpSocket<'a, 'b> {
     }
 
     fn dup(
-        socket_set: &mut SocketSet,
+        iface: &mut SmolnetInterface,
         file: &mut SchemeFile<Self>,
         path: &str,
         port_set: &mut Self::SchemeDataT,
@@ -167,7 +168,7 @@ impl<'a, 'b> SchemeSocket for UdpSocket<'a, 'b> {
         };
 
         let endpoint = {
-            let socket = socket_set.get::<UdpSocket>(socket_handle);
+            let socket = iface.get_socket::<UdpSocket>(socket_handle);
             socket.endpoint()
         };
 
