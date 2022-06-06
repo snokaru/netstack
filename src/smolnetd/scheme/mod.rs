@@ -133,6 +133,7 @@ impl Smolnetd {
     }
 
     pub fn on_udp_scheme_event(&mut self) -> Result<Option<()>> {
+        trace!("received event");
         self.udp_scheme.on_scheme_event()?;
         let _ = self.poll()?;
         Ok(None)

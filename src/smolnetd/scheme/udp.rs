@@ -63,6 +63,7 @@ impl<'a> SchemeSocket for UdpSocket<'a> {
         uid: u32,
         port_set: &mut Self::SchemeDataT,
     ) -> SyscallResult<(SocketHandle, Self::DataT)> {
+        trace!("UDP open {}", path);
         let mut parts = path.split('/');
         let remote_endpoint = parse_endpoint(parts.next().unwrap_or(""));
         let mut local_endpoint = parse_endpoint(parts.next().unwrap_or(""));
@@ -90,11 +91,13 @@ impl<'a> SchemeSocket for UdpSocket<'a> {
         }
 
         let socket_handle = iface.add_socket(udp_socket);
+        trace!("UDP add socket {}", socket_handle);
 
-        let mut udp_socket = iface.get_socket::<UdpSocket>(socket_handle);
+        let udp_socket = iface.get_socket::<UdpSocket>(socket_handle);
         udp_socket
             .bind(local_endpoint)
             .expect("Can't bind udp socket to local endpoint");
+        trace!("UDP bind socket {}", socket_handle);
 
         Ok((socket_handle, remote_endpoint))
     }
@@ -149,6 +152,7 @@ impl<'a> SchemeSocket for UdpSocket<'a> {
         path: &str,
         port_set: &mut Self::SchemeDataT,
     ) -> SyscallResult<DupResult<Self>> {
+        trace!("duping...");
         let socket_handle = file.socket_handle();
         let file = match path {
             _ => {

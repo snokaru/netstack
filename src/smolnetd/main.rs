@@ -152,6 +152,7 @@ fn run() -> Result<()> {
 fn main() {
     if unsafe { syscall::clone(CloneFlags::empty()).unwrap() } == 0 {
         logger::init_logger();
+        info!("Starting process...");
 
         if let Err(err) = run() {
             error!("smoltcpd: {}", err);

@@ -6,7 +6,7 @@ use syscall::Result as SyscallResult;
 pub type CfgNodeRef = Rc<RefCell<CfgNode>>;
 
 pub trait NodeWriter {
-    fn write_line(&mut self, &str) -> SyscallResult<()> {
+    fn write_line(&mut self, content: &str) -> SyscallResult<()> {
         Ok(())
     }
 

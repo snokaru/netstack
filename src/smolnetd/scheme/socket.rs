@@ -524,6 +524,8 @@ where
                 .ok_or_else(|| SyscallError::new(syscall::EBADF))?;
             file.socket_handle()
         };
+        trace!("socket close: {}", socket_handle);
+
         let scheme_file = self.files.remove(&fd);
         let mut iface = self.iface.borrow_mut();
         if let Some(scheme_file) = scheme_file {
@@ -538,7 +540,16 @@ where
              }| a != fd,
         );
 
-        iface.remove_socket(socket_handle);
+        trace!("removing...");
+        let mut no_refs_for_socket = true;
+        for (searched_fd, file) in &self.files {
+            if *searched_fd != fd && file.socket_handle() == socket_handle {
+                no_refs_for_socket = false;
+            }
+        }
+        if no_refs_for_socket {
+            iface.remove_socket(socket_handle);
+        }
         //TODO: removing sockets in release should make prune unnecessary
         Ok(Some(0))
     }
