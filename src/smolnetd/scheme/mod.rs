@@ -48,7 +48,6 @@ pub struct Smolnetd {
     tcp_scheme: TcpScheme,
     icmp_scheme: IcmpScheme,
     netcfg_scheme: NetCfgScheme,
-
     input_queue: Rc<RefCell<VecDeque<Buffer>>>,
     buffer_pool: Rc<RefCell<BufferPool>>,
 }
@@ -217,6 +216,7 @@ impl Smolnetd {
     }
 
     fn read_frames(&mut self) -> Result<usize> {
+        println!("reading frames...");
         let mut total_frames = 0;
         loop {
             let mut buffer = self.buffer_pool.borrow_mut().get_buffer();

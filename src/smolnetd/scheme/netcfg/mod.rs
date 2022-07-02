@@ -391,6 +391,7 @@ impl NetCfgScheme {
 
 impl SchemeMut for NetCfgScheme {
     fn open(&mut self, path: &str, _flags: usize, uid: u32, _gid: u32) -> SyscallResult<usize> {
+        println!("netcfg scheme event");
         let mut current_node = Rc::clone(&self.root_node);
         for part in path.split('/') {
             if part.is_empty() {
@@ -468,6 +469,7 @@ impl SchemeMut for NetCfgScheme {
     }
 
     fn read(&mut self, fd: usize, buf: &mut [u8]) -> SyscallResult<usize> {
+        println!("netcfg scheme read");
         let file = self.files
             .get_mut(&fd)
             .ok_or_else(|| SyscallError::new(syscall::EBADF))?;

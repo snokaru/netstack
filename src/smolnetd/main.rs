@@ -31,7 +31,7 @@ fn run() -> Result<()> {
     use syscall::flag::*;
 
     trace!("opening network:");
-    let network_fd = syscall::open("network:", O_RDWR | O_NONBLOCK)
+    let network_fd = syscall::open("filter:", O_RDWR | O_NONBLOCK)
         .map_err(|e| Error::from_syscall_error(e, "failed to open network:"))?
         as RawFd;
 
@@ -140,6 +140,8 @@ fn run() -> Result<()> {
             smolnetd.borrow_mut().on_netcfg_scheme_event()
         })
         .map_err(|e| Error::from_io_error(e, "failed to listen to netcfg events"))?;
+
+    trace!("running all events...");
 
     event_queue.trigger_all(event::Event {
         fd: 0,
